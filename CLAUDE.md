@@ -72,10 +72,11 @@ Copy `.env.example` to `.env` and fill in keys.
 ```bash
 cd ~/Projects/Ripple
 
-# Install deps (first time only)
-/opt/homebrew/opt/python@3.11/bin/python3.11 -m venv .venv
+# Install deps (first time only — uses uv-managed Python 3.12)
+uv venv --python 3.12 --clear
 source .venv/bin/activate
-pip install -r requirements.txt
+uv pip install pip
+uv pip install -r requirements.txt
 
 # Launch UI
 streamlit run ui/app.py
@@ -115,3 +116,125 @@ Agent YAML formatting is sensitive. Jinja-style `{variable}` interpolation happe
 The `SentenceTransformerEmbeddingFunction` downloads the model on first run (~90MB). Subsequent runs are instant.
 
 If `GEMINI_API_KEY` is missing or invalid, CrewAI raises a generic LiteLLM error with no helpful message. Check the key first before debugging agents.
+
+---
+
+## GitHub Workflow Standards
+
+These are the standards followed on this project. Apply them every time you push or open a PR.
+
+### Branch strategy
+
+Never commit to `main` directly. Every change lives on its own branch, merged via PR.
+
+```
+feature/   new capability        e.g. feature/thread-generation
+fix/       bug correction        e.g. fix/twitter-char-overflow
+refactor/  structural change     e.g. refactor/memory-client
+docs/      documentation only    e.g. docs/api-endpoints
+chore/     tooling or config     e.g. chore/update-dependencies
+perf/      performance work      e.g. perf/parallel-agents
+```
+
+Branch names: lowercase, hyphenated, under 50 characters. Branch from `main`, merge back to `main`. Delete the branch after merge.
+
+### Commit message format (Conventional Commits)
+
+```
+<type>(<scope>): <short description under 50 chars>
+
+[optional body — explain WHY, not what the diff shows]
+
+[optional footer — e.g. Closes #12]
+```
+
+Types: `feat`, `fix`, `refactor`, `docs`, `chore`, `perf`, `test`, `ci`
+
+Use imperative mood in the subject ("add" not "added"). No period at the end. Body wraps at 72 characters. Breaking changes use `!` after type: `feat(api)!: rename endpoint`.
+
+Good examples:
+```
+feat(agents): add parallel execution for psychologist and strategist tasks
+fix(parser): handle missing platform label in crew output
+chore: bump crewai to 0.131.0
+docs: document CSV ingest format in README
+```
+
+### Pull requests
+
+Keep PRs under 400 lines. Review quality drops sharply above that — split large features into sequential PRs instead.
+
+Every PR description answers: what changed, why it was needed, how to verify it. Open as draft early for complex work.
+
+### Releases and tagging
+
+Semantic versioning: `vMAJOR.MINOR.PATCH`
+
+```
+PATCH   bug fix, no new features     v1.0.1
+MINOR   new feature, backwards compat v1.1.0
+MAJOR   breaking change               v2.0.0
+```
+
+Always use annotated tags (not lightweight):
+```bash
+git tag -a v1.0.0 -m "v1.0.0: initial release"
+git push origin v1.0.0
+```
+
+Create a GitHub Release for every tag. The release body is the changelog for that version.
+
+### Creating a new GitHub repo from scratch
+
+```bash
+cd ~/Projects/Ripple
+
+# 1. init and first commit already done — skip if repo exists
+git init
+git add -A
+git commit -m "feat: initial project scaffold"
+
+# 2. create remote repo (gh CLI)
+gh repo create ripple --public --description "Trend-driven social content generator" --source=. --remote=origin --push
+
+# 3. tag the initial release
+git tag -a v0.1.0 -m "v0.1.0: initial release"
+git push origin v0.1.0
+
+# 4. create a GitHub release
+gh release create v0.1.0 --title "v0.1.0: Initial release" --notes "First working version of the Ripple pipeline."
+
+# 5. protect main branch (requires repo admin)
+gh api repos/{owner}/{repo}/branches/main/protection \
+  --method PUT \
+  --field required_pull_request_reviews='{"required_approving_review_count":1}' \
+  --field enforce_admins=false
+```
+
+### Day-to-day push workflow
+
+```bash
+# Start work
+git checkout -b feature/your-feature-name
+
+# Commit as you go
+git add path/to/changed/files
+git commit -m "feat(scope): description"
+
+# Keep branch current
+git fetch origin
+git rebase origin/main
+
+# Push and open PR
+git push -u origin feature/your-feature-name
+gh pr create --title "feat: your feature" --body "What, why, how to test"
+
+# After merge, clean up
+git checkout main
+git pull origin main
+git branch -d feature/your-feature-name
+```
+
+### What never goes in a commit
+
+`.env` files, credentials, API keys, large binaries, build artifacts, `__pycache__`, `.venv`. All covered in `.gitignore`. If a secret is accidentally committed, rotate the key immediately — do not just delete the file in a new commit, as it remains in history.
