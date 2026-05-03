@@ -1,0 +1,83 @@
+trend_research:
+  description: >
+    Search Reddit, HackerNews, and the web for the most active conversations
+    happening RIGHT NOW in the {niche} space. Use all available tools.
+    Return a structured list of exactly 10 trends, each with:
+    - The trend title or topic
+    - Where it was found (platform, subreddit, etc.)
+    - Engagement signal (upvotes, comments, points)
+    - A one-sentence summary of why this is trending
+  expected_output: >
+    A numbered list of 10 trends with source, engagement signal, and a brief
+    explanation of what is driving the conversation.
+  agent: trend_hunter
+
+audience_analysis:
+  description: >
+    Take the 10 trends from the previous task and analyse the emotional landscape.
+    For each trend, identify: the primary emotion driving it (fear, desire, FOMO,
+    frustration, pride, curiosity), the audience segment most invested in it,
+    and a single insight sentence that could become the core of a viral post.
+  expected_output: >
+    A structured breakdown for each trend: emotion type, audience segment,
+    and a one-sentence content insight.
+  agent: audience_psychologist
+
+content_strategy:
+  description: >
+    Using the trends and emotional insights, create {angles} content angles for
+    the platforms {platforms}. Each angle must be clearly distinct. For each angle provide:
+    - The angle name (a short label)
+    - The emotional hook it targets
+    - Which platform it is best suited for and why
+    - A sample opening line (not the final copy, just a direction)
+  expected_output: >
+    {angles} clearly differentiated content angles with platform recommendations
+    and sample opening directions.
+  agent: content_strategist
+
+copywriting:
+  description: >
+    For each content angle, write {variations} post variations per platform in {platforms}.
+    Requirements per piece:
+    - A strong hook (first 1-2 lines that stop the scroll)
+    - A body that delivers value or a story
+    - A clear call to action
+    - 3 to 5 relevant hashtags
+    - Character count within platform limits (Twitter: 280, LinkedIn: 3000, Instagram: 2200)
+    Label each piece clearly with: PLATFORM | ANGLE | VARIATION NUMBER
+  expected_output: >
+    All content pieces clearly labelled, with hook, body, hashtags, and character count
+    noted for each.
+  agent: copywriter
+
+creative_review:
+  description: >
+    Review every content piece written. For each one:
+    - Rate the hook strength (weak / decent / strong)
+    - Rewrite any weak hooks
+    - Confirm the body delivers on the hook's promise
+    - Add a format suggestion (e.g. "thread", "carousel", "single stat image", "text only")
+    - Flag any that sound too corporate or AI-generated and rewrite them
+  expected_output: >
+    The full revised content list with hook ratings, any rewrites applied,
+    and a format suggestion for each piece.
+  agent: creative_director
+
+scoring:
+  description: >
+    Score every final content piece on a 0-100 scale using:
+    - Scroll-stop power: 30 points (how strong is the first line?)
+    - Emotional resonance: 25 points (does it connect emotionally?)
+    - Platform fit: 20 points (does the format and tone match the platform?)
+    - Clarity: 15 points (is the message immediately clear?)
+    - Originality: 10 points (does it feel fresh, not generic?)
+
+    Also query past performance memory for any similar content.
+    Mark the top 10 scoring pieces as RECOMMENDED.
+
+    Return the complete list sorted by score descending, with score breakdown.
+  expected_output: >
+    Full scored list of all content pieces sorted by total score, with per-dimension
+    breakdown and RECOMMENDED label on top pieces.
+  agent: performance_analyst
