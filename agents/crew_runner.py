@@ -1,8 +1,8 @@
 from __future__ import annotations
 import os
+import re
 import time
 from pathlib import Path
-from typing import Optional
 from crewai import Agent, Crew, Task, LLM, Process
 from pydantic import BaseModel, Field
 import yaml
@@ -15,6 +15,29 @@ from tools.memory_tool import MemoryQueryTool
 
 
 _CONFIG_DIR = Path(__file__).parent / "config"
+
+# Tried in order when a model hits its quota. All are free-tier Gemini models.
+_FALLBACK_MODELS = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-flash-latest",
+]
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    return "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
+
+
+def _is_daily_limit(exc: Exception) -> bool:
+    return "PerDay" in str(exc) or "per_day" in str(exc).lower()
+
+
+def _retry_delay(exc: Exception) -> float:
+    match = re.search(r"retry in (\d+\.?\d*)", str(exc), re.IGNORECASE)
+    return float(match.group(1)) + 3 if match else 20.0
 
 
 # ── Structured output models for agent tasks ─────────────────────────────────
@@ -54,9 +77,9 @@ def _load_yaml(filename: str) -> dict:
         return yaml.safe_load(f)
 
 
-def _make_llm() -> LLM:
+def _make_llm(model: str | None = None) -> LLM:
     return LLM(
-        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+        model=model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite"),
         api_key=os.getenv("GEMINI_API_KEY", ""),
         temperature=0.7,
     )
@@ -133,8 +156,49 @@ def _extract_trends(task_output) -> list[str]:
 
 def run_crew(config: RunConfig) -> RunResult:
     start = time.time()
-    llm = _make_llm()
 
+    # Build model priority list: env var first, then fallbacks (deduped)
+    preferred = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    model_queue = [preferred] + [m for m in _FALLBACK_MODELS if m != preferred]
+
+    last_error: Exception | None = None
+
+    for model in model_queue:
+        try:
+            return _run_with_model(config, model, start)
+        except Exception as exc:
+            last_error = exc
+            if not _is_quota_error(exc):
+                break  # non-quota error — don't bother trying other models
+            if _is_daily_limit(exc):
+                # daily cap hit — skip to next model immediately
+                continue
+            # per-minute rate limit — wait then retry same model once
+            wait = _retry_delay(exc)
+            time.sleep(wait)
+            try:
+                return _run_with_model(config, model, start)
+            except Exception as retry_exc:
+                last_error = retry_exc
+                if _is_quota_error(retry_exc):
+                    continue  # still failing, try next model
+                break
+
+    return RunResult(
+        run_id=config.run_id,
+        niche=config.niche,
+        platforms=config.platforms,
+        error=(
+            "All Gemini models have hit their free-tier daily quota. "
+            "Try again tomorrow, or add billing to your Google AI Studio project. "
+            f"Last error: {last_error}"
+        ),
+        duration_seconds=round(time.time() - start, 1),
+    )
+
+
+def _run_with_model(config: RunConfig, model: str, start: float) -> RunResult:
+    llm = _make_llm(model)
     agents_cfg = _load_yaml("agents.yaml")
     tasks_cfg = _load_yaml("tasks.yaml")
 
@@ -202,44 +266,30 @@ def run_crew(config: RunConfig) -> RunResult:
         verbose=False,
     )
 
-    try:
-        crew.kickoff()
+    crew.kickoff()
 
-        pieces: list[ContentPiece] = []
+    pieces: list[ContentPiece] = []
 
-        # Try structured output from analyst first
-        if t_score.output and hasattr(t_score.output, "pydantic") and t_score.output.pydantic:
-            pieces = _pieces_from_structured(t_score.output.pydantic, config)
-        # Fall back to structured output from copywriter
-        elif t_copy.output and hasattr(t_copy.output, "pydantic") and t_copy.output.pydantic:
-            pieces = _pieces_from_structured(t_copy.output.pydantic, config)
+    if t_score.output and hasattr(t_score.output, "pydantic") and t_score.output.pydantic:
+        pieces = _pieces_from_structured(t_score.output.pydantic, config)
+    elif t_copy.output and hasattr(t_copy.output, "pydantic") and t_copy.output.pydantic:
+        pieces = _pieces_from_structured(t_copy.output.pydantic, config)
 
-        # If structured output failed, parse the review task's raw text
-        if not pieces and t_review.output:
-            pieces = _parse_raw_fallback(str(t_review.output), config)
+    if not pieces and t_review.output:
+        pieces = _parse_raw_fallback(str(t_review.output), config)
 
-        # Sort and mark top 10 as recommended
-        pieces.sort(key=lambda p: p.score, reverse=True)
-        for piece in pieces[:10]:
-            piece.recommended = True
+    pieces.sort(key=lambda p: p.score, reverse=True)
+    for piece in pieces[:10]:
+        piece.recommended = True
 
-        return RunResult(
-            run_id=config.run_id,
-            niche=config.niche,
-            platforms=config.platforms,
-            pieces=pieces,
-            trends_found=_extract_trends(t_research.output),
-            duration_seconds=round(time.time() - start, 1),
-        )
-
-    except Exception as e:
-        return RunResult(
-            run_id=config.run_id,
-            niche=config.niche,
-            platforms=config.platforms,
-            error=str(e),
-            duration_seconds=round(time.time() - start, 1),
-        )
+    return RunResult(
+        run_id=config.run_id,
+        niche=config.niche,
+        platforms=config.platforms,
+        pieces=pieces,
+        trends_found=_extract_trends(t_research.output),
+        duration_seconds=round(time.time() - start, 1),
+    )
 
 
 def _parse_raw_fallback(raw: str, config: RunConfig) -> list[ContentPiece]:

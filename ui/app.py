@@ -154,7 +154,14 @@ def render_piece(piece, idx: int) -> None:
 
 def render_result(result) -> None:
     if result.error:
-        st.error(f"Run failed: {result.error}")
+        if "daily quota" in result.error.lower() or "all gemini models" in result.error.lower():
+            st.error("All free-tier Gemini models have hit today's quota limit.")
+            st.info(
+                "Free tier resets at midnight Pacific time. You can also enable billing on your "
+                "Google AI Studio project to remove daily limits — costs are very low (~$0.03/run)."
+            )
+        else:
+            st.error(f"Run failed: {result.error}")
         return
 
     st.success(f"Run complete in {result.duration_seconds}s — {len(result.pieces)} pieces generated")
