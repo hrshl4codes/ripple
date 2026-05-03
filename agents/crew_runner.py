@@ -2,7 +2,9 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from typing import Optional
 from crewai import Agent, Crew, Task, LLM, Process
+from pydantic import BaseModel, Field
 import yaml
 
 from core.config import RunConfig, RunResult, ContentPiece, PLATFORM_LIMITS
@@ -15,6 +17,38 @@ from tools.memory_tool import MemoryQueryTool
 _CONFIG_DIR = Path(__file__).parent / "config"
 
 
+# ── Structured output models for agent tasks ─────────────────────────────────
+
+class RawPiece(BaseModel):
+    platform: str
+    angle: str
+    hook: str
+    body: str
+    hashtags: list[str] = Field(default_factory=list)
+
+class CopywriterOutput(BaseModel):
+    pieces: list[RawPiece]
+
+class ScoredPiece(BaseModel):
+    platform: str
+    angle: str
+    hook: str
+    body: str
+    hashtags: list[str] = Field(default_factory=list)
+    score: float = Field(ge=0, le=100)
+    scroll_stop: float = Field(ge=0, le=30)
+    emotional_resonance: float = Field(ge=0, le=25)
+    platform_fit: float = Field(ge=0, le=20)
+    clarity: float = Field(ge=0, le=15)
+    originality: float = Field(ge=0, le=10)
+    recommended: bool = False
+
+class AnalystOutput(BaseModel):
+    pieces: list[ScoredPiece]
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def _load_yaml(filename: str) -> dict:
     with open(_CONFIG_DIR / filename) as f:
         return yaml.safe_load(f)
@@ -22,88 +56,80 @@ def _load_yaml(filename: str) -> dict:
 
 def _make_llm() -> LLM:
     return LLM(
-        model=os.getenv("GEMINI_MODEL", "gemini/gemini-1.5-flash"),
+        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite"),
         api_key=os.getenv("GEMINI_API_KEY", ""),
         temperature=0.7,
     )
 
 
-def _parse_output_to_pieces(raw: str, config: RunConfig) -> list[ContentPiece]:
-    """
-    Best-effort parser: extracts labelled content blocks from the crew's final output.
-    Falls back to a single piece with the full text if parsing fails.
-    """
-    pieces: list[ContentPiece] = []
-    blocks = raw.strip().split("\n\n")
-    current: dict = {}
+def _enforce_limits(piece: RawPiece | ScoredPiece, platform: str) -> tuple[str, str, int]:
+    limit = PLATFORM_LIMITS.get(platform, 280)
+    hook = piece.hook.strip()
+    body = piece.body.strip()
+    tags = " ".join(f"#{t.lstrip('#')}" for t in piece.hashtags[:5])
+    full = f"{hook}\n\n{body}\n\n{tags}".strip() if tags else f"{hook}\n\n{body}".strip()
+    if len(full) > limit:
+        available = limit - len(hook) - (len(tags) + 4 if tags else 0) - 6
+        body = body[:max(0, available)].rsplit(" ", 1)[0].rstrip() + "..."
+        full = f"{hook}\n\n{body}\n\n{tags}".strip() if tags else f"{hook}\n\n{body}".strip()
+    return hook, body, len(full)
 
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            if current.get("body"):
-                pieces.append(_build_piece(current, config))
-                current = {}
-            continue
 
-        lower = line.lower()
-        if any(p in lower for p in ["twitter", "linkedin", "instagram"]) and "|" in line:
-            if current.get("body"):
-                pieces.append(_build_piece(current, config))
-            parts = [p.strip() for p in line.split("|")]
-            current = {
-                "platform": next((p for p in ["twitter", "linkedin", "instagram"] if p in lower), "twitter"),
-                "angle": parts[1] if len(parts) > 1 else "general",
-                "variation": parts[2] if len(parts) > 2 else "1",
-                "hook": "",
-                "body": "",
-                "hashtags": [],
+def _pieces_from_structured(output: AnalystOutput | CopywriterOutput, config: RunConfig) -> list[ContentPiece]:
+    pieces = []
+    raw_list = output.pieces
+
+    for i, raw in enumerate(raw_list):
+        platform = raw.platform.lower().strip()
+        if platform not in PLATFORM_LIMITS:
+            platform = config.platforms[0]
+
+        hook, body, char_count = _enforce_limits(raw, platform)
+
+        score = 0.0
+        breakdown: dict[str, float] = {}
+        recommended = False
+        if isinstance(raw, ScoredPiece):
+            score = raw.score
+            breakdown = {
+                "scroll_stop": raw.scroll_stop,
+                "emotional_resonance": raw.emotional_resonance,
+                "platform_fit": raw.platform_fit,
+                "clarity": raw.clarity,
+                "originality": raw.originality,
             }
-        elif current and not current.get("hook"):
-            current["hook"] = line
-        elif current and line.startswith("#"):
-            current["hashtags"] = [w.lstrip("#") for w in line.split() if w.startswith("#")]
-        elif current:
-            current["body"] = (current.get("body", "") + " " + line).strip()
+            recommended = raw.recommended
 
-    if current.get("body") or current.get("hook"):
-        pieces.append(_build_piece(current, config))
-
-    if not pieces:
-        for platform in config.platforms:
-            pieces.append(ContentPiece(
-                platform=platform,
-                angle="general",
-                hook=raw[:100],
-                body=raw[100:500],
-                hashtags=[],
-                char_count=min(len(raw), PLATFORM_LIMITS.get(platform, 280)),
-                score=50.0,
-            ))
+        pieces.append(ContentPiece(
+            platform=platform,
+            angle=raw.angle[:60],
+            hook=hook,
+            body=body,
+            hashtags=[t.lstrip("#") for t in raw.hashtags[:5]],
+            char_count=char_count,
+            score=score,
+            score_breakdown=breakdown,
+            recommended=recommended,
+            variation_index=i,
+        ))
 
     return pieces
 
 
-def _build_piece(data: dict, config: RunConfig) -> ContentPiece:
-    platform = data.get("platform", config.platforms[0])
-    limit = PLATFORM_LIMITS.get(platform, 280)
-    body = data.get("body", "")
-    hook = data.get("hook", "")
-    hashtags = data.get("hashtags", [])
+def _extract_trends(task_output) -> list[str]:
+    if not task_output:
+        return []
+    trends = []
+    for line in str(task_output).splitlines():
+        line = line.strip()
+        if line and (line[0].isdigit() or line.startswith(("*", "-", "•"))):
+            cleaned = line.lstrip("0123456789.*-•) ").strip()
+            if len(cleaned) > 10:
+                trends.append(cleaned)
+    return trends[:10]
 
-    full = f"{hook}\n\n{body}".strip()
-    if len(full) > limit:
-        body = body[: limit - len(hook) - 10].rsplit(" ", 1)[0] + "..."
 
-    return ContentPiece(
-        platform=platform,
-        angle=data.get("angle", "general"),
-        hook=hook,
-        body=body,
-        hashtags=hashtags[:5],
-        char_count=len(full),
-        score=0.0,
-    )
-
+# ── Main runner ───────────────────────────────────────────────────────────────
 
 def run_crew(config: RunConfig) -> RunResult:
     start = time.time()
@@ -143,29 +169,31 @@ def run_crew(config: RunConfig) -> RunResult:
     director = make_agent("creative_director")
     analyst = make_agent("performance_analyst", [memory_tool])
 
-    def make_task(key: str, agent: Agent, context=None) -> Task:
+    fmt = dict(
+        niche=config.niche,
+        platforms=", ".join(config.platforms),
+        angles=config.angles,
+        variations=config.variations,
+    )
+
+    def make_task(key: str, agent: Agent, context=None, output_pydantic=None) -> Task:
         cfg = tasks_cfg[key]
-        return Task(
-            description=cfg["description"].format(
-                niche=config.niche,
-                platforms=", ".join(config.platforms),
-                angles=config.angles,
-                variations=config.variations,
-            ),
-            expected_output=cfg["expected_output"].format(
-                angles=config.angles,
-                variations=config.variations,
-            ),
+        kwargs = dict(
+            description=cfg["description"].format(**fmt),
+            expected_output=cfg["expected_output"].format(**fmt),
             agent=agent,
             context=context or [],
         )
+        if output_pydantic:
+            kwargs["output_pydantic"] = output_pydantic
+        return Task(**kwargs)
 
     t_research = make_task("trend_research", trend_hunter)
     t_audience = make_task("audience_analysis", psychologist, [t_research])
     t_strategy = make_task("content_strategy", strategist, [t_research, t_audience])
-    t_copy = make_task("copywriting", copywriter, [t_strategy, t_audience])
+    t_copy = make_task("copywriting", copywriter, [t_strategy, t_audience], CopywriterOutput)
     t_review = make_task("creative_review", director, [t_copy])
-    t_score = make_task("scoring", analyst, [t_review])
+    t_score = make_task("scoring", analyst, [t_review, t_copy], AnalystOutput)
 
     crew = Crew(
         agents=[trend_hunter, psychologist, strategist, copywriter, director, analyst],
@@ -175,27 +203,32 @@ def run_crew(config: RunConfig) -> RunResult:
     )
 
     try:
-        result = crew.kickoff()
-        raw_output = str(result)
-        pieces = _parse_output_to_pieces(raw_output, config)
+        crew.kickoff()
 
+        pieces: list[ContentPiece] = []
+
+        # Try structured output from analyst first
+        if t_score.output and hasattr(t_score.output, "pydantic") and t_score.output.pydantic:
+            pieces = _pieces_from_structured(t_score.output.pydantic, config)
+        # Fall back to structured output from copywriter
+        elif t_copy.output and hasattr(t_copy.output, "pydantic") and t_copy.output.pydantic:
+            pieces = _pieces_from_structured(t_copy.output.pydantic, config)
+
+        # If structured output failed, parse the review task's raw text
+        if not pieces and t_review.output:
+            pieces = _parse_raw_fallback(str(t_review.output), config)
+
+        # Sort and mark top 10 as recommended
         pieces.sort(key=lambda p: p.score, reverse=True)
-        for i, piece in enumerate(pieces[:10]):
+        for piece in pieces[:10]:
             piece.recommended = True
-
-        trends_found: list[str] = []
-        if t_research.output:
-            for line in str(t_research.output).splitlines():
-                line = line.strip()
-                if line and (line[0].isdigit() or line.startswith("-")):
-                    trends_found.append(line.lstrip("0123456789.-) "))
 
         return RunResult(
             run_id=config.run_id,
             niche=config.niche,
             platforms=config.platforms,
             pieces=pieces,
-            trends_found=trends_found[:10],
+            trends_found=_extract_trends(t_research.output),
             duration_seconds=round(time.time() - start, 1),
         )
 
@@ -207,3 +240,61 @@ def run_crew(config: RunConfig) -> RunResult:
             error=str(e),
             duration_seconds=round(time.time() - start, 1),
         )
+
+
+def _parse_raw_fallback(raw: str, config: RunConfig) -> list[ContentPiece]:
+    """Last-resort parser when structured output is unavailable."""
+    pieces: list[ContentPiece] = []
+    current: dict = {}
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            if current.get("hook"):
+                pieces.append(_build_piece_from_dict(current, config))
+                current = {}
+            continue
+
+        lower = line.lower()
+        is_header = any(p in lower for p in ["twitter", "linkedin", "instagram"])
+
+        if is_header:
+            if current.get("hook"):
+                pieces.append(_build_piece_from_dict(current, config))
+            platform = next((p for p in ["twitter", "linkedin", "instagram"] if p in lower), config.platforms[0])
+            parts = [p.strip() for p in line.split("|")]
+            current = {
+                "platform": platform,
+                "angle": parts[1] if len(parts) > 1 else "general",
+                "hook": "",
+                "body": "",
+                "hashtags": [],
+            }
+        elif current and not current.get("hook") and len(line) > 5:
+            current["hook"] = line
+        elif current and all(w.startswith("#") for w in line.split() if w):
+            current["hashtags"] = [w.lstrip("#") for w in line.split()]
+        elif current:
+            current["body"] = (current.get("body", "") + " " + line).strip()
+
+    if current.get("hook"):
+        pieces.append(_build_piece_from_dict(current, config))
+
+    return pieces
+
+
+def _build_piece_from_dict(data: dict, config: RunConfig) -> ContentPiece:
+    platform = data.get("platform", config.platforms[0])
+    hook, body, char_count = _enforce_limits(
+        type("_", (), {"hook": data.get("hook", ""), "body": data.get("body", ""), "hashtags": data.get("hashtags", [])})(),
+        platform,
+    )
+    return ContentPiece(
+        platform=platform,
+        angle=data.get("angle", "general"),
+        hook=hook,
+        body=body,
+        hashtags=data.get("hashtags", [])[:5],
+        char_count=char_count,
+        score=0.0,
+    )

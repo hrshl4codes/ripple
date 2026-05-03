@@ -42,13 +42,15 @@ copywriting:
     Requirements per piece:
     - A strong hook (first 1-2 lines that stop the scroll)
     - A body that delivers value or a story
-    - A clear call to action
-    - 3 to 5 relevant hashtags
-    - Character count within platform limits (Twitter: 280, LinkedIn: 3000, Instagram: 2200)
-    Label each piece clearly with: PLATFORM | ANGLE | VARIATION NUMBER
+    - A clear call to action at the end
+    - 3 to 5 relevant hashtags (without the # symbol)
+    - Stay within character limits: Twitter 280, LinkedIn 3000, Instagram 2200
+
+    Return a JSON object with a "pieces" array. Each piece has these exact fields:
+    platform (string), angle (string), hook (string), body (string), hashtags (list of strings without #).
   expected_output: >
-    All content pieces clearly labelled, with hook, body, hashtags, and character count
-    noted for each.
+    A valid JSON object with a "pieces" array containing all content pieces,
+    each with platform, angle, hook, body, and hashtags fields.
   agent: copywriter
 
 creative_review:
@@ -66,18 +68,23 @@ creative_review:
 
 scoring:
   description: >
-    Score every final content piece on a 0-100 scale using:
-    - Scroll-stop power: 30 points (how strong is the first line?)
-    - Emotional resonance: 25 points (does it connect emotionally?)
-    - Platform fit: 20 points (does the format and tone match the platform?)
-    - Clarity: 15 points (is the message immediately clear?)
-    - Originality: 10 points (does it feel fresh, not generic?)
+    Score every content piece from the copywriting task. Use your editorial judgement —
+    you do not need any tools to score. Optionally query past performance for context.
 
-    Also query past performance memory for any similar content.
-    Mark the top 10 scoring pieces as RECOMMENDED.
+    Score each piece on this rubric (total 100 points):
+    - scroll_stop: max 30 (how strong is the first line?)
+    - emotional_resonance: max 25 (does it connect emotionally?)
+    - platform_fit: max 20 (does the tone match the platform?)
+    - clarity: max 15 (is the message immediately clear?)
+    - originality: max 10 (does it feel fresh, not generic?)
 
-    Return the complete list sorted by score descending, with score breakdown.
+    The total score = sum of all five dimensions.
+    Mark the top 10 highest-scoring pieces as recommended = true.
+
+    Return a JSON object with a "pieces" array. Each piece must include all original
+    fields (platform, angle, hook, body, hashtags) plus: score, scroll_stop,
+    emotional_resonance, platform_fit, clarity, originality, recommended.
   expected_output: >
-    Full scored list of all content pieces sorted by total score, with per-dimension
-    breakdown and RECOMMENDED label on top pieces.
+    A valid JSON object with a "pieces" array where every piece includes the original
+    content fields plus score breakdown and recommended flag.
   agent: performance_analyst

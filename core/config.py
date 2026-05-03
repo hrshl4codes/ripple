@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     reddit_user_agent: str = "Ripple/1.0"
     chroma_persist_dir: str = "./memory/performance_db"
     outputs_dir: str = "./outputs"
-    gemini_model: str = "gemini/gemini-1.5-flash"
+    gemini_model: str = "gemini-2.5-flash-lite"
 
 
 class RunConfig(BaseModel):

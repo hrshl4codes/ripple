@@ -38,7 +38,7 @@ Ripple/
 
 ## Key Design Decisions
 
-**LLM:** Gemini 1.5 Flash via LiteLLM (`gemini/gemini-1.5-flash`). Free tier: 1500 req/day, 1M tokens/day. Set with `GEMINI_API_KEY`.
+**LLM:** Gemini 2.0 Flash via CrewAI native provider (`gemini-2.0-flash`). Free tier on Google AI Studio. Set with `GEMINI_API_KEY` and `GEMINI_MODEL=gemini-2.0-flash`.
 
 **Embeddings:** sentence-transformers `all-MiniLM-L6-v2` running locally via chromadb's `SentenceTransformerEmbeddingFunction`. No API cost, no key required.
 
