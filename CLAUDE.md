@@ -1,6 +1,36 @@
 # Ripple
 
-Ripple is a trend-driven social content generator. It runs a 6-agent CrewAI pipeline that researches what is trending in a given niche (Reddit, HackerNews, Serper/Google), generates scored content for Twitter, LinkedIn, and Instagram, and learns over time via a local ChromaDB vector database.
+Ripple is a trend-driven social content generator. It runs a 6-agent CrewAI pipeline that researches what is trending in a given niche (Reddit, HackerNews, Serper/Google), generates scored content for Twitter, LinkedIn, Instagram, and YouTube Shorts, and learns over time via a local ChromaDB vector database.
+
+GitHub repo: https://github.com/hrshl4codes/ripple
+
+---
+
+## Current State (as of May 2026)
+
+Everything below is built and working.
+
+**Core pipeline**
+6 CrewAI agents run sequentially: Trend Hunter, Audience Psychologist, Content Strategist, Copywriter, Creative Director, Performance Analyst. Output comes back as structured Pydantic models (not free text), so parsing is reliable.
+
+**Platforms supported**
+Twitter (280 chars), LinkedIn (3000 chars), Instagram (2200 chars), YouTube Shorts (structured 60-second script with hook, body, CTA, title, thumbnail text).
+
+**Trend sources**
+Reddit (via PRAW, requires credentials), HackerNews Algolia API (free, no auth, used as fallback), Serper/Google Search.
+
+**Memory loop**
+ChromaDB with sentence-transformers `all-MiniLM-L6-v2` embeddings running locally. After posting, user uploads a CSV with engagement data. Future runs use past performance to bias scoring.
+
+**UI**
+Streamlit at `ui/app.py`. Live agent streaming via `st.status()` — shows each agent completing in real time instead of a blank spinner. Reddit credentials can be entered and tested directly from the sidebar without touching `.env`. Shorts pieces render as structured script cards (Hook / Script / CTA sections). Past runs visible in sidebar. CSV export on every run.
+
+**Model fallback chain**
+When a Gemini model hits its free-tier daily quota (429), the runner automatically tries the next model in this order:
+`gemini-2.5-flash-lite → gemini-2.5-flash → gemini-2.0-flash → gemini-2.0-flash-lite → gemini-flash-lite-latest → gemini-flash-latest`
+
+**GitHub**
+Conventional Commits on all commits. Annotated tags for releases. v0.1.0 released. See the GitHub Workflow Standards section below for the full process.
 
 ---
 
@@ -9,46 +39,52 @@ Ripple is a trend-driven social content generator. It runs a 6-agent CrewAI pipe
 ```
 Ripple/
 ├── main.py                  CLI entry point (typer)
-├── ui/app.py                Streamlit UI (primary interface)
+├── ui/
+│   ├── app.py               Streamlit UI (primary interface)
+│   └── assets/ripple.png    Logo
 ├── core/
-│   ├── config.py            RunConfig, RunResult, ContentPiece, Settings, PLATFORM_LIMITS
-│   └── pipeline.py          run(), load_result(), list_runs()
+│   ├── config.py            RunConfig, RunResult, ContentPiece, Settings,
+│   │                        PLATFORM_LIMITS, SHORTS_PLATFORM
+│   └── pipeline.py          run(config, status_callback), load_result(), list_runs()
 ├── agents/
-│   ├── crew_runner.py       CrewAI orchestration, agent + task wiring, output parser
+│   ├── crew_runner.py       CrewAI orchestration, Pydantic output models,
+│   │                        model fallback chain, task_callback wiring
 │   └── config/
 │       ├── agents.yaml      Agent role/goal/backstory definitions
-│       └── tasks.yaml       Task descriptions and expected outputs
+│       └── tasks.yaml       Task descriptions and expected JSON output schemas
 ├── tools/
-│   ├── reddit_tool.py       Reddit (PRAW) + HackerNews fallback
-│   ├── hackernews_tool.py   HackerNews Algolia API
+│   ├── reddit_tool.py       Reddit (PRAW) with HackerNews fallback
+│   ├── hackernews_tool.py   HackerNews Algolia API (free, no auth)
 │   ├── search_tool.py       Serper (Google Search)
 │   └── memory_tool.py       ChromaDB semantic similarity lookup
 ├── memory/
 │   ├── chroma_client.py     ChromaDB client, sentence-transformers embeddings
-│   └── ingest.py            CSV ingestion for real engagement data
+│   └── ingest.py            CSV performance ingestion
 ├── api/
 │   ├── server.py            FastAPI app
 │   └── routes/
 │       ├── runs.py          POST /runs, GET /runs, GET /runs/{id}
 │       └── memory.py        POST /memory/ingest
-└── outputs/                 JSON run results (auto-created)
+└── outputs/                 JSON run results (auto-created, git-ignored)
 ```
 
 ---
 
 ## Key Design Decisions
 
-**LLM:** Gemini 2.0 Flash via CrewAI native provider (`gemini-2.0-flash`). Free tier on Google AI Studio. Set with `GEMINI_API_KEY` and `GEMINI_MODEL=gemini-2.0-flash`.
+**LLM:** Gemini 2.5 Flash Lite via CrewAI native provider. Default model: `gemini-2.5-flash-lite`. Overridden by `GEMINI_MODEL` env var. Free tier on Google AI Studio (new key from aistudio.google.com, not GCP console — the GCP console keys often have limit:0 on free tier models).
 
-**Embeddings:** sentence-transformers `all-MiniLM-L6-v2` running locally via chromadb's `SentenceTransformerEmbeddingFunction`. No API cost, no key required.
+**Embeddings:** sentence-transformers `all-MiniLM-L6-v2` via ChromaDB's `SentenceTransformerEmbeddingFunction`. Runs locally on CPU. Downloads ~90MB on first run, instant after that. No API key or cost.
 
-**Agent pipeline:** Sequential CrewAI process. Tasks pass context forward explicitly (each task receives relevant prior task outputs as context). `allow_delegation=False` on all agents to prevent unexpected routing.
+**Structured output:** Copywriter task uses `output_pydantic=CopywriterOutput`, Analyst task uses `output_pydantic=AnalystOutput`. Both defined in `crew_runner.py`. This replaced the original brittle text parser. If structured output fails, `_parse_raw_fallback()` attempts text extraction as last resort.
 
-**Output parsing:** `_parse_output_to_pieces()` in `crew_runner.py` does best-effort block parsing keyed on `PLATFORM | ANGLE | VARIATION` label lines. Falls back to a raw dump if parsing fails. This is intentionally lenient because LLM output formatting is unpredictable.
+**YouTube Shorts fields:** `RawPiece` and `ScoredPiece` have optional `title`, `thumbnail_text`, `cta` fields. Empty string for non-Shorts platforms. `ContentPiece.full_text()` branches on `platform == SHORTS_PLATFORM` to format the script layout.
 
-**Character limits:** Enforced at parse time in `_build_piece()`. Body is truncated at word boundary if over limit. Limits live in `PLATFORM_LIMITS` in `core/config.py`.
+**Streaming:** `pipeline.run()` accepts an optional `status_callback(agent_role, preview)`. The UI passes a callback that puts messages onto a `queue.Queue`. A background thread runs the crew; the main thread drains the queue inside `st.status()`, updating the display as each agent finishes.
 
-**Memory learning:** After posting, user uploads a CSV with columns `content_id, text, platform, niche, likes, shares, comments`. Engagement score = `likes + 5*shares + 2*comments`. Stored in ChromaDB. The Performance Analyst agent queries this on every run.
+**Agent pipeline:** Sequential CrewAI process. `allow_delegation=False` on all agents. Tasks receive prior task outputs as explicit `context`. `task_callback=_on_task_done` fires after each task and calls `status_callback` if set.
+
+**Memory learning:** Engagement score = `likes + 5*shares + 2*comments`. Stored in ChromaDB with platform and niche metadata. Performance Analyst queries on every run using `MemoryQueryTool`.
 
 ---
 
@@ -56,14 +92,14 @@ Ripple/
 
 | Variable | Required | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | Yes | Get free at aistudio.google.com |
-| `SERPER_API_KEY` | Yes | Get free at serper.dev (2500/month) |
-| `REDDIT_CLIENT_ID` | No | Better trend data; app-only auth |
+| `GEMINI_API_KEY` | Yes | Get free at aistudio.google.com (not GCP console) |
+| `SERPER_API_KEY` | Yes | serper.dev — 2500 free queries/month |
+| `GEMINI_MODEL` | No | Defaults to `gemini-2.5-flash-lite` |
+| `REDDIT_CLIENT_ID` | No | reddit.com/prefs/apps — create a script app |
 | `REDDIT_CLIENT_SECRET` | No | Pairs with CLIENT_ID |
+| `REDDIT_USER_AGENT` | No | Defaults to `Ripple/1.0` |
 | `CHROMA_PERSIST_DIR` | No | Defaults to `./memory/performance_db` |
 | `OUTPUTS_DIR` | No | Defaults to `./outputs` |
-
-Copy `.env.example` to `.env` and fill in keys.
 
 ---
 
@@ -77,13 +113,13 @@ uv venv --python 3.12 --clear
 source .venv/bin/activate
 uv pip install pip
 uv pip install -r requirements.txt
+uv pip install google-genai   # required for CrewAI Gemini native provider
 
-# Launch UI
+# Launch UI (primary way to use Ripple)
 streamlit run ui/app.py
 
-# Or use CLI
-python main.py run "AI productivity tools" --platforms twitter,linkedin --angles 3
-python main.py ui          # also launches the UI
+# CLI
+python main.py run "AI productivity tools" --platforms twitter,linkedin,youtube_shorts --angles 3
 python main.py runs        # list past runs
 python main.py ingest path/to/results.csv
 
@@ -93,29 +129,33 @@ uvicorn api.server:app --reload --port 8000
 
 ---
 
-## What to Work On Next
+## What to Build Next
 
-Things that are not yet built but are planned:
+These are not yet implemented, ranked by impact:
 
-1. Score breakdown parsing: the Performance Analyst returns scores as text but `_parse_output_to_pieces()` does not yet extract per-dimension scores into `score_breakdown`. Needs a regex or structured output pass.
+**1. Content deduplication**
+Before generating, query ChromaDB for any past post with cosine similarity above 0.92. Skip generating if a near-duplicate exists. Prevents the same content from being regenerated across runs. Lives in `crew_runner.py` before the copywriting task.
 
-2. Streaming: currently the UI shows a spinner until all 6 agents complete. Adding `st.write_stream` with CrewAI callbacks would let users see each agent's output as it arrives.
+**2. Post scheduling**
+Add a `scheduled_for: datetime | None` field to `ContentPiece`. Add a calendar view in the UI (Streamlit has no native calendar — use `streamlit-calendar` or a simple date-grouped list) showing posts queued per day.
 
-3. Deduplication: before writing a new piece, query ChromaDB and skip if cosine similarity is above 0.92 with any past post. Prevents the model from regenerating very similar content over time.
+**3. Twitter thread generation**
+When a LinkedIn-length piece is generated for Twitter, offer a thread breakdown (1/ 2/ 3/ format). Add a "Convert to thread" button in the UI that calls a lightweight agent to split it.
 
-4. Reddit credentials flow: currently the app silently falls back to HackerNews if Reddit keys are missing. A better UX would be a settings page in the UI that validates credentials on save.
-
-5. Post scheduling: add a `scheduled_for` field to `ContentPiece` and a simple calendar view in the UI showing which posts are lined up for which day.
+**4. Settings page**
+A dedicated Settings tab in the UI for: entering/testing API keys (Gemini, Serper, Reddit), selecting default model, setting default platforms. Currently requires editing `.env` directly for everything except Reddit.
 
 ---
 
 ## Pitfalls
 
-Agent YAML formatting is sensitive. Jinja-style `{variable}` interpolation happens in `crew_runner.py` via Python `.format()` on the description/goal strings. If a YAML value contains a literal `{` for any other reason it will break. Escape with `{{`.
+YAML task descriptions use Python `.format()` for variable interpolation. Any literal `{` in the YAML will break it. Escape with `{{`.
 
-The `SentenceTransformerEmbeddingFunction` downloads the model on first run (~90MB). Subsequent runs are instant.
+The `google-genai` package must be installed separately (`uv pip install google-genai`) — it is not pulled in by `crewai` automatically and its absence causes a confusing ImportError.
 
-If `GEMINI_API_KEY` is missing or invalid, CrewAI raises a generic LiteLLM error with no helpful message. Check the key first before debugging agents.
+API keys from the GCP Console often have `limit: 0` on free-tier Gemini models. Always use keys generated from aistudio.google.com for free tier access.
+
+If Streamlit is already running when `.env` is updated, restart the process — `load_dotenv()` runs at import time and the old values stay in memory.
 
 ---
 
@@ -150,91 +190,38 @@ Branch names: lowercase, hyphenated, under 50 characters. Branch from `main`, me
 
 Types: `feat`, `fix`, `refactor`, `docs`, `chore`, `perf`, `test`, `ci`
 
-Use imperative mood in the subject ("add" not "added"). No period at the end. Body wraps at 72 characters. Breaking changes use `!` after type: `feat(api)!: rename endpoint`.
-
-Good examples:
-```
-feat(agents): add parallel execution for psychologist and strategist tasks
-fix(parser): handle missing platform label in crew output
-chore: bump crewai to 0.131.0
-docs: document CSV ingest format in README
-```
+Use imperative mood ("add" not "added"). No period at the end. Body wraps at 72 characters. Breaking changes use `!` after type: `feat(api)!: rename endpoint`.
 
 ### Pull requests
 
-Keep PRs under 400 lines. Review quality drops sharply above that — split large features into sequential PRs instead.
-
-Every PR description answers: what changed, why it was needed, how to verify it. Open as draft early for complex work.
+Keep PRs under 400 lines. Split large features into sequential PRs. Every PR description answers: what changed, why it was needed, how to verify it.
 
 ### Releases and tagging
 
 Semantic versioning: `vMAJOR.MINOR.PATCH`
 
-```
-PATCH   bug fix, no new features     v1.0.1
-MINOR   new feature, backwards compat v1.1.0
-MAJOR   breaking change               v2.0.0
-```
-
-Always use annotated tags (not lightweight):
+Always use annotated tags:
 ```bash
-git tag -a v1.0.0 -m "v1.0.0: initial release"
-git push origin v1.0.0
-```
-
-Create a GitHub Release for every tag. The release body is the changelog for that version.
-
-### Creating a new GitHub repo from scratch
-
-```bash
-cd ~/Projects/Ripple
-
-# 1. init and first commit already done — skip if repo exists
-git init
-git add -A
-git commit -m "feat: initial project scaffold"
-
-# 2. create remote repo (gh CLI)
-gh repo create ripple --public --description "Trend-driven social content generator" --source=. --remote=origin --push
-
-# 3. tag the initial release
-git tag -a v0.1.0 -m "v0.1.0: initial release"
-git push origin v0.1.0
-
-# 4. create a GitHub release
-gh release create v0.1.0 --title "v0.1.0: Initial release" --notes "First working version of the Ripple pipeline."
-
-# 5. protect main branch (requires repo admin)
-gh api repos/{owner}/{repo}/branches/main/protection \
-  --method PUT \
-  --field required_pull_request_reviews='{"required_approving_review_count":1}' \
-  --field enforce_admins=false
+git tag -a v1.1.0 -m "v1.1.0: description"
+git push origin v1.1.0
+gh release create v1.1.0 --title "v1.1.0: description" --notes "Changelog here."
 ```
 
 ### Day-to-day push workflow
 
 ```bash
-# Start work
 git checkout -b feature/your-feature-name
-
-# Commit as you go
-git add path/to/changed/files
+# make changes
+git add specific/files
 git commit -m "feat(scope): description"
-
-# Keep branch current
-git fetch origin
-git rebase origin/main
-
-# Push and open PR
+git fetch origin && git rebase origin/main
 git push -u origin feature/your-feature-name
 gh pr create --title "feat: your feature" --body "What, why, how to test"
-
-# After merge, clean up
-git checkout main
-git pull origin main
+# after merge
+git checkout main && git pull origin main
 git branch -d feature/your-feature-name
 ```
 
 ### What never goes in a commit
 
-`.env` files, credentials, API keys, large binaries, build artifacts, `__pycache__`, `.venv`. All covered in `.gitignore`. If a secret is accidentally committed, rotate the key immediately — do not just delete the file in a new commit, as it remains in history.
+`.env`, credentials, API keys, `__pycache__`, `.venv`, `outputs/`, `memory/performance_db/`. All in `.gitignore`. If a secret is accidentally committed, rotate the key immediately.
