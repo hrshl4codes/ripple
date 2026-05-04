@@ -2,13 +2,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Callable
 
 from core.config import RunConfig, RunResult
 
 
-def run(config: RunConfig) -> RunResult:
+def run(config: RunConfig, status_callback: Callable[[str, str], None] | None = None) -> RunResult:
     from agents.crew_runner import run_crew
-    result = run_crew(config)
+    result = run_crew(config, status_callback=status_callback)
     _persist(result)
     return result
 

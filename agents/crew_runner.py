@@ -154,10 +154,9 @@ def _extract_trends(task_output) -> list[str]:
 
 # ── Main runner ───────────────────────────────────────────────────────────────
 
-def run_crew(config: RunConfig) -> RunResult:
+def run_crew(config: RunConfig, status_callback=None) -> RunResult:
     start = time.time()
 
-    # Build model priority list: env var first, then fallbacks (deduped)
     preferred = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
     model_queue = [preferred] + [m for m in _FALLBACK_MODELS if m != preferred]
 
@@ -165,23 +164,21 @@ def run_crew(config: RunConfig) -> RunResult:
 
     for model in model_queue:
         try:
-            return _run_with_model(config, model, start)
+            return _run_with_model(config, model, start, status_callback)
         except Exception as exc:
             last_error = exc
             if not _is_quota_error(exc):
-                break  # non-quota error — don't bother trying other models
+                break
             if _is_daily_limit(exc):
-                # daily cap hit — skip to next model immediately
                 continue
-            # per-minute rate limit — wait then retry same model once
             wait = _retry_delay(exc)
             time.sleep(wait)
             try:
-                return _run_with_model(config, model, start)
+                return _run_with_model(config, model, start, status_callback)
             except Exception as retry_exc:
                 last_error = retry_exc
                 if _is_quota_error(retry_exc):
-                    continue  # still failing, try next model
+                    continue
                 break
 
     return RunResult(
@@ -197,7 +194,7 @@ def run_crew(config: RunConfig) -> RunResult:
     )
 
 
-def _run_with_model(config: RunConfig, model: str, start: float) -> RunResult:
+def _run_with_model(config: RunConfig, model: str, start: float, status_callback=None) -> RunResult:
     llm = _make_llm(model)
     agents_cfg = _load_yaml("agents.yaml")
     tasks_cfg = _load_yaml("tasks.yaml")
@@ -259,10 +256,16 @@ def _run_with_model(config: RunConfig, model: str, start: float) -> RunResult:
     t_review = make_task("creative_review", director, [t_copy])
     t_score = make_task("scoring", analyst, [t_review, t_copy], AnalystOutput)
 
+    def _on_task_done(task_output) -> None:
+        if status_callback:
+            role = getattr(task_output, "agent", "") or ""
+            status_callback(str(role), str(getattr(task_output, "raw", "") or "")[:120])
+
     crew = Crew(
         agents=[trend_hunter, psychologist, strategist, copywriter, director, analyst],
         tasks=[t_research, t_audience, t_strategy, t_copy, t_review, t_score],
         process=Process.sequential,
+        task_callback=_on_task_done,
         verbose=False,
     )
 
