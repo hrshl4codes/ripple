@@ -12,9 +12,11 @@ load_dotenv()
 from core.config import RunConfig, PLATFORM_LIMITS
 from core import pipeline
 
+_ASSETS = os.path.join(os.path.dirname(__file__), "assets")
+
 st.set_page_config(
     page_title="Ripple",
-    page_icon="🌊",
+    page_icon=os.path.join(_ASSETS, "ripple.png"),
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -50,7 +52,8 @@ st.markdown("""
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image("https://via.placeholder.com/200x60/0ea5e9/ffffff?text=🌊+Ripple", use_container_width=True)
+    _logo = os.path.join(os.path.dirname(__file__), "assets", "ripple.png")
+    st.image(_logo, use_container_width=True)
     st.markdown("### New Run")
 
     niche = st.text_input("Your niche", placeholder="e.g. AI productivity tools for students")
