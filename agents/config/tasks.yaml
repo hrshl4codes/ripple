@@ -38,19 +38,31 @@ content_strategy:
 
 copywriting:
   description: >
-    For each content angle, write {variations} post variations per platform in {platforms}.
-    Requirements per piece:
-    - A strong hook (first 1-2 lines that stop the scroll)
-    - A body that delivers value or a story
-    - A clear call to action at the end
-    - 3 to 5 relevant hashtags (without the # symbol)
-    - Stay within character limits: Twitter 280, LinkedIn 3000, Instagram 2200
+    For each content angle, write {variations} variations per platform in {platforms}.
 
-    Return a JSON object with a "pieces" array. Each piece has these exact fields:
-    platform (string), angle (string), hook (string), body (string), hashtags (list of strings without #).
+    For Twitter, LinkedIn, Instagram:
+    - hook: a strong scroll-stopping first line
+    - body: value, story, or insight that delivers on the hook
+    - call to action at the end of the body
+    - 3 to 5 hashtags (without the # symbol)
+    - Stay within: Twitter 280, LinkedIn 3000, Instagram 2200 characters
+    - Leave title, thumbnail_text, and cta as empty strings
+
+    For YouTube Shorts (if youtube_shorts is in the platforms list):
+    - hook: one punchy spoken line that creates curiosity or shock in 3 seconds
+    - body: the full spoken script for the remaining 45 seconds. Conversational,
+      punchy sentences. Written to be spoken out loud, not read. No filler words.
+    - cta: a simple 5-second spoken call to action (e.g. "Follow for more [niche] tips every week")
+    - title: a clickable YouTube title under 70 characters with a curiosity gap
+    - thumbnail_text: 3 to 5 bold words that would work as thumbnail overlay text
+    - hashtags: 3 to 5 YouTube-relevant hashtags (without the # symbol)
+
+    Return a JSON object with a "pieces" array. Every piece must have all these fields
+    (use empty string for fields not applicable to the platform):
+    platform, angle, hook, body, hashtags, title, thumbnail_text, cta.
   expected_output: >
-    A valid JSON object with a "pieces" array containing all content pieces,
-    each with platform, angle, hook, body, and hashtags fields.
+    A valid JSON object with a "pieces" array. Every piece has platform, angle,
+    hook, body, hashtags, title, thumbnail_text, and cta fields.
   agent: copywriter
 
 creative_review:
@@ -82,9 +94,9 @@ scoring:
     Mark the top 10 highest-scoring pieces as recommended = true.
 
     Return a JSON object with a "pieces" array. Each piece must include all original
-    fields (platform, angle, hook, body, hashtags) plus: score, scroll_stop,
-    emotional_resonance, platform_fit, clarity, originality, recommended.
+    fields (platform, angle, hook, body, hashtags, title, thumbnail_text, cta)
+    plus: score, scroll_stop, emotional_resonance, platform_fit, clarity, originality, recommended.
   expected_output: >
-    A valid JSON object with a "pieces" array where every piece includes the original
+    A valid JSON object with a "pieces" array where every piece includes all original
     content fields plus score breakdown and recommended flag.
   agent: performance_analyst

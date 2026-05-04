@@ -48,6 +48,10 @@ class RawPiece(BaseModel):
     hook: str
     body: str
     hashtags: list[str] = Field(default_factory=list)
+    # YouTube Shorts only — empty string for other platforms
+    title: str = ""
+    thumbnail_text: str = ""
+    cta: str = ""
 
 class CopywriterOutput(BaseModel):
     pieces: list[RawPiece]
@@ -58,6 +62,9 @@ class ScoredPiece(BaseModel):
     hook: str
     body: str
     hashtags: list[str] = Field(default_factory=list)
+    title: str = ""
+    thumbnail_text: str = ""
+    cta: str = ""
     score: float = Field(ge=0, le=100)
     scroll_stop: float = Field(ge=0, le=30)
     emotional_resonance: float = Field(ge=0, le=25)
@@ -134,6 +141,9 @@ def _pieces_from_structured(output: AnalystOutput | CopywriterOutput, config: Ru
             score_breakdown=breakdown,
             recommended=recommended,
             variation_index=i,
+            title=getattr(raw, "title", "") or "",
+            thumbnail_text=getattr(raw, "thumbnail_text", "") or "",
+            cta=getattr(raw, "cta", "") or "",
         ))
 
     return pieces

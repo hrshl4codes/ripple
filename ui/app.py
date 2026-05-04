@@ -50,6 +50,15 @@ st.markdown("""
 .tag-linkedin  { background: #e0e7ff; color: #3730a3; }
 .tag-instagram { background: #fce7f3; color: #9d174d; }
 .recommended-badge { color: #f59e0b; font-weight: 700; }
+.tag-youtube_shorts { background: #fee2e2; color: #991b1b; }
+.shorts-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #6b7280;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,7 +99,7 @@ with st.sidebar:
     subreddits_raw = st.text_input("Subreddits (optional)", placeholder="e.g. productivity, SaaS")
     platforms = st.multiselect(
         "Platforms",
-        ["twitter", "linkedin", "instagram"],
+        ["twitter", "linkedin", "instagram", "youtube_shorts"],
         default=["twitter", "linkedin"],
     )
     angles = st.slider("Content angles", 1, 8, 3)
@@ -173,7 +182,59 @@ def platform_tag(platform: str) -> str:
     return f'<span class="platform-tag tag-{platform}">{platform.upper()}</span>'
 
 
+def render_shorts_piece(piece, idx) -> None:
+    rec = "⭐ RECOMMENDED" if piece.recommended else ""
+    score_html = f'<span class="score-badge {score_class(piece.score)}">{piece.score:.0f}/100</span>'
+
+    rec_html = f'<span class="recommended-badge">{rec}</span>' if rec else ""
+    with st.container():
+        col1, col2 = st.columns([8, 2])
+        with col1:
+            st.markdown(
+                f"{platform_tag(piece.platform)} **{piece.angle}** {rec_html}",
+                unsafe_allow_html=True,
+            )
+        with col2:
+            st.markdown(score_html, unsafe_allow_html=True)
+
+        if piece.title:
+            st.markdown(f"**Title:** {piece.title}")
+        if piece.thumbnail_text:
+            st.markdown(f"**Thumbnail:** `{piece.thumbnail_text}`")
+
+        st.markdown('<p class="shorts-label">Hook (3s)</p>', unsafe_allow_html=True)
+        st.text_area("hook", value=piece.hook, height=70,
+                     label_visibility="collapsed", key=f"sh_{idx}")
+
+        st.markdown('<p class="shorts-label">Script (45s)</p>', unsafe_allow_html=True)
+        st.text_area("body", value=piece.body, height=200,
+                     label_visibility="collapsed", key=f"sb_{idx}")
+
+        if piece.cta:
+            st.markdown('<p class="shorts-label">CTA (5s)</p>', unsafe_allow_html=True)
+            st.text_area("cta", value=piece.cta, height=60,
+                         label_visibility="collapsed", key=f"sc_{idx}")
+
+        hashtag_str = " ".join(f"#{t}" for t in piece.hashtags)
+        if hashtag_str:
+            st.markdown(f"<small style='color:#6b7280'>{hashtag_str}</small>",
+                        unsafe_allow_html=True)
+
+        if piece.score_breakdown:
+            with st.expander("Score breakdown"):
+                bd = piece.score_breakdown
+                cols = st.columns(len(bd))
+                for col, (k, v) in zip(cols, bd.items()):
+                    col.metric(k.replace("_", " ").title(), f"{v:.0f}")
+
+        st.divider()
+
+
 def render_piece(piece, idx) -> None:
+    if piece.platform == "youtube_shorts":
+        render_shorts_piece(piece, idx)
+        return
+
     rec = "⭐ RECOMMENDED" if piece.recommended else ""
     score_html = f'<span class="score-badge {score_class(piece.score)}">{piece.score:.0f}/100</span>'
 

@@ -5,13 +5,16 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-Platform = Literal["twitter", "linkedin", "instagram"]
+Platform = Literal["twitter", "linkedin", "instagram", "youtube_shorts"]
 
 PLATFORM_LIMITS = {
     "twitter": 280,
     "linkedin": 3000,
     "instagram": 2200,
+    "youtube_shorts": 2500,  # ~60 second spoken script at ~150 words/min
 }
+
+SHORTS_PLATFORM = "youtube_shorts"
 
 
 class Settings(BaseSettings):
@@ -62,8 +65,26 @@ class ContentPiece(BaseModel):
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     recommended: bool = False
     variation_index: int = 0
+    # YouTube Shorts specific — empty for other platforms
+    title: str = ""
+    thumbnail_text: str = ""
+    cta: str = ""
 
     def full_text(self) -> str:
+        if self.platform == SHORTS_PLATFORM:
+            parts = []
+            if self.title:
+                parts.append(f"TITLE: {self.title}")
+            if self.thumbnail_text:
+                parts.append(f"THUMBNAIL: {self.thumbnail_text}")
+            parts.append(f"[HOOK — 3s]\n{self.hook}")
+            parts.append(f"[SCRIPT — 45s]\n{self.body}")
+            if self.cta:
+                parts.append(f"[CTA — 5s]\n{self.cta}")
+            tags = " ".join(f"#{t.lstrip('#')}" for t in self.hashtags)
+            if tags:
+                parts.append(tags)
+            return "\n\n".join(parts)
         tags = " ".join(f"#{t.lstrip('#')}" for t in self.hashtags)
         parts = [self.hook, self.body]
         if tags:
